@@ -1,0 +1,7 @@
+{
+  "api_token":"{api_token}",
+  "admin_tools": {
+    "accessible": false,
+    "password": "{password}"
+  }
+}
