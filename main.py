@@ -1,30 +1,43 @@
-import telebot
+from datetime import datetime
 import json
 from os.path import exists
 from os import kill, getpid
-from base64 import b64decode, b64encode
 
+import telebot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaVideo
+from telebot.types import ReplyKeyboardMarkup, KeyboardButton
+
+
+def timeformat():
+    et = datetime.now()
+    return (f'{str(et.day).rjust(2, "0")}.{str(et.month).rjust(2, "0")}' +
+            f'.{et.year} {et.hour}:{str(et.minute).rjust(2, "0")}')
 
 class Bot:
     start_message = """\
-Hello! This bot is an emergency base64 converter.
-Use /help for user manual"""
-
+<b>Привет!</b>
+Этот бот - место для обмена фотографиями"""
+    sign_up_message = """
+<b>Для использования неограниченной версии бота необходимо выбрать никнейм.</b>
+Можно выбрать один из предложенных вариантов или прислать свой. Никнейм может быть изменён позже"""
     help_message = """\
-<b>Commands:</b>
-/start - Restart bot
-/help - Display user manual (this one)
+<b>Команды:</b>
+/start - Перезапустить бота
+/help - Отобразить список команд (этот)
 
-<i># Special-syntax commands #</i>
-/b64 - Encode following text with base64
-  Example: <code>/b64 Hewwo :3</code>
-/str - Decode following text with base64
-  Example: <code>/str SGV3d28gOjM=</code>
-<i># Important: the message must start with "/b64" or "/str", text for processing is selected after first space found #</i>
-"""
-
-    syntax_error_message = """\
-Wrong syntax. Use /help"""
+/profile - Посмотреть свой профиль
+/nickname - Обновить никнейм"""
+    nick_syntax_warning = """\
+<b>Неверный формат никнейма</b>
+Никнейм должен:
+- состоять из латинских букв или цифр
+- быть в длину не меньше 4 и не больше 32
+Повторите попытку"""
+    nick_exists_warning = """\
+<b>Никнейм занят</b>
+Никнейм - это уникальное имя пользователя, по которому его можно идентифицировать. \
+Поэтому никнеймы не должны повторяться
+Повторите попытку"""
 
     def __init__(self, api_token):
         self.bot = telebot.TeleBot(api_token)
@@ -34,17 +47,50 @@ Wrong syntax. Use /help"""
                 "get-text": lambda usr: self.help_message
             }
         }
+        self.application_data = {
+        }
         if not exists(self.udb_path):
             with open(self.udb_path, 'w') as udf:
                 json.dump({"auth": [],
-                           "users": []}, udf, indent=2)
+                           "users": {}, "sessions": {}}, udf, indent=2)
+        print()
+
+    def get_session(self, user):
+        with open(self.udb_path) as udb:
+            udb_data = json.load(udb)
+            session_data = None if str(user) not in udb_data['sessions'] else \
+                udb_data['sessions'][str(user)]
+        return session_data
+
+    def set_session(self, user, **values):
+        with open(self.udb_path) as udb:
+            udb_data = json.load(udb)
+        if str(user) not in udb_data:
+            udb_data['sessions'][str(user)] = {**values}
+        else:
+            for name, value in values.keys():
+                udb_data[str(user)][name] = value
+        with open(self.udb_path, 'w') as udb:
+            json.dump(udb_data, udb, indent=2)
+
+    def get_users(self):
+        with open(self.udb_path) as udb:
+            udb_data = json.load(udb)
+        return udb_data['users']
+
+    def set_users(self, users):
+        with open(self.udb_path) as udb:
+            udb_data = json.load(udb)
+        udb_data['users'] = users
+        with open(self.udb_path, 'w') as udb:
+            json.dump(udb_data, udb, indent=2)
 
     def boot(self):
-        print("Booting up...")
+        print("[STATUS] Pending")
         self.bot.infinity_polling()
 
     def load_handlers(self):
-        print("Loading handlers...")
+        print("[STATUS] Loading handlers...")
 
         @self.bot.message_handler(content_types=["photo"])
         def dm_photo(msg):
@@ -53,65 +99,75 @@ Wrong syntax. Use /help"""
 
         @self.bot.message_handler(commands=["start"])
         def dm_start(msg):
-            self.bot.send_message(msg.chat.id, self.start_message, parse_mode="html")
-            with open(self.udb_path) as udb:
-                udb_data = json.load(udb)
-                udb_data["users"] = list(set(udb_data["users"] + [msg.from_user.id]))
-            with open(self.udb_path, 'w') as udb:
-                json.dump(udb_data, udb, indent=2)
+            cid = msg.from_user.id
+            users = self.get_users()
+
+            if cid not in users:
+                markup = ReplyKeyboardMarkup(resize_keyboard=True)
+                buttons = []
+                if msg.from_user.username:
+                    buttons.append(msg.from_user.username)
+                if msg.from_user.first_name:
+                    buttons.append(msg.from_user.first_name)
+                markup.add(*buttons)
+
+                self.bot.send_message(msg.chat.id, self.start_message, parse_mode="html")
+                self.bot.send_message(msg.chat.id, self.sign_up_message, parse_mode="html",
+                                      reply_markup=markup)
+                self.set_session(cid, expect="nickname")
+
+            else:
+                pass
+
         @self.bot.message_handler(commands=["help"])
         def dm_help(msg):
             self.bot.send_message(msg.chat.id, self.commands_functions["help"]["get-text"](msg.chat.id),
                                   parse_mode="html")
 
-        @self.bot.message_handler(commands=["b64"])
-        def dm_b64(msg):
-            text = msg.text
-            if text.startswith("/b64 "):
-                user_string = text[5:]
-                out = f"<code>{b64encode(user_string.encode()).decode()}</code>"
-                self.bot.reply_to(msg, out, parse_mode="html")
-            else:
-                self.bot.reply_to(msg, self.syntax_error_message, parse_mode="html")
+        @self.bot.message_handler(content_types=["text"])
+        def dm_text(msg):
+            cid = str(msg.from_user.id)
+            session = self.get_session(cid)
+            if session and session['expect']:
+                expect = session['expect']
 
-        @self.bot.message_handler(commands=["str"])
-        def dm_str(msg):
-            text = msg.text
-            if text.startswith("/str "):
-                user_string = text[5:]
-                try:
-                    out = f"<code>{b64decode(user_string.encode()).decode()}</code>"
-                except Exception as e:
-                    out = f"Error: invalid base64 string ({e})"
-                self.bot.reply_to(msg, out, parse_mode="html")
-            else:
-                self.bot.reply_to(msg, self.syntax_error_message, parse_mode="html")
+                if expect == 'nickname':
+                    users = self.get_users()
+                    if not (msg.text.isalnum() and 3 < len(msg.text) < 33):
+                        self.bot.send_message(msg.chat.id, self.nick_syntax_warning , parse_mode="html")
+                        return
+                    if msg.text in [user['nickname'] for user in users]:
+                        self.bot.send_message(msg.chat.id, self.nick_exists_warning, parse_mode="html")
+                        return
+                    if cid not in users:
+                        users[cid] = {
+                            "nickname": msg.text,
+                            "created": timeformat()
+                        }
+                        self.set_session(cid, expect=None)
+                        self.set_users(users)
+                        self.bot.send_message(msg.chat.id, "ГОЙДА",
+                                              reply_markup=telebot.types.ReplyKeyboardRemove())
+                    else:
+                        users[cid]["nickname"] = msg.text
+                        self.set_session(cid, expect=None)
+                        self.bot.send_message(msg.chat.id, "Никнейм обновлён",
+                                              reply_markup=telebot.types.ReplyKeyboardRemove())
+
 
     def enable_admin_tools(self, master_password):
-        print("Adding AdminTools:")
-        print(" - adding alternative help message...")
-        self.master_password = master_password
-        self.admin_help_message = """\
-<b>Commands:</b>
-/start - Restart bot
-/help - Display user manual (this one)
-
-<i># Special-syntax commands #</i>
-/b64 - Encode following text with base64
-  Example: <code>/b64 Hewwo :3</code>
-/str - Decode following text with base64
-  Example: <code>/str SGV3d28gOjM=</code>
-<i># Important: the message must start with "/b64" or "/str", text for processing is selected after first space found #</i>
-
+        print("[STATUS] Enabling ADMINTOOLS")
+        self.application_data["AdminTools"] = {}
+        self.application_data["AdminTools"]["password"] = master_password
+        self.application_data["AdminTools"]["help"] = """
 <i>## Admin Tools ##</i>
 /auth {password} - get access to Admin Tools
 /post {text} - send every user of this bot a message
 /force_stop - stop the bot entirely
 /quit_AT - quit admin tools
 """
-        self.commands_functions["help"]["get-text"] = lambda usr: self.admin_help_message \
+        self.commands_functions["help"]["get-text"] = lambda usr: self.application_data["AdminTools"]["help"] \
             if check_auth(self, usr) else self.help_message
-        print(" - realising session control...")
 
         def check_auth(self, usr):
             with open(self.udb_path) as udb:
@@ -124,14 +180,11 @@ Wrong syntax. Use /help"""
                 if close:
                     udb_data["auth"].remove(usr)
             with open(self.udb_path, 'w') as udb:
-                json.dump(udb_data, udb, indent=2)
-
-
-        print(" - loading message handlers...")
+                json.dump(udb_data, udb)
 
         @self.bot.message_handler(commands=["auth"])
         def dm_at_auth(msg):
-            if msg.text[6:] == self.master_password:
+            if msg.text[6:] == self.application_data["AdminTools"]["password"]:
                 new_auth(self, msg.from_user.id)
                 self.bot.send_message(msg.chat.id, "You can use Admin Tools now")
             else:
@@ -142,7 +195,7 @@ Wrong syntax. Use /help"""
             if not check_auth(self, msg.from_user.id):
                 return
             try:
-                kill(getpid(), 9)
+                kill(getpid(), 2)
             except Exception as e:
                 self.bot.send_message(msg.chat.id, str(e))
             self.bot.send_message(msg.chat.id, "Cannot terminate process")
