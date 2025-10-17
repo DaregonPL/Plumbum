@@ -4,7 +4,7 @@ from os.path import exists
 from os import kill, getpid
 
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaVideo
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 
@@ -17,6 +17,10 @@ class Bot:
     start_message = """\
 <b>Привет!</b>
 Этот бот - место для обмена фотографиями"""
+    menu_message = """\
+<b>Привет, {}!</b>
+Начните с поста своего изображения (просто пришлите фото сюда)
+или откройте обменник с помощью /menu"""
     sign_up_message = """
 <b>Для использования неограниченной версии бота необходимо выбрать никнейм.</b>
 Можно выбрать один из предложенных вариантов или прислать свой. Никнейм может быть изменён позже"""
@@ -25,6 +29,7 @@ class Bot:
 /start - Перезапустить бота
 /help - Отобразить список команд (этот)
 
+/menu - Открыть обменник
 /profile - Посмотреть свой профиль
 /nickname - Обновить никнейм"""
     nick_syntax_warning = """\
@@ -108,34 +113,51 @@ class Bot:
     def load_handlers(self):
         print("[STATUS] Loading handlers...")
 
+        @self.bot.callback_query_handler()
+        def dm_call(call):
+            cid = call.message.from_user.id
+            msg = call.message
+            command, *data = call.data.split(';')
+            session = self.get_session(str(cid))
+
+            if command == 'photo':
+                action = data[0]
+                if action == 'cancel':
+                    self.bot.delete_message(msg.chat.id, msg.id)
+                    self.set_session(str(cid), photo=None)
+                elif action == 'post':
+                    content = self.get_content()
+
+
         @self.bot.message_handler(content_types=["photo"])
         def dm_photo(msg):
             cid = msg.from_user.id
             users = self.get_users()
-            if cid not in users:
+            if str(cid) not in users:
                 dm_start(msg)
             else:
                 photo = max(msg.photo, key=lambda x: x.height)
                 markup = InlineKeyboardMarkup()
-                markup.add(InlineKeyboardButton("Отмена", "photo;cancel"),
-                           InlineKeyboardButton("Опубликовать", "photo;post"))
-                new_msg = self.bot.send_photo(msg.chat.id, photo=photo, caption="Опубликовать изображение?",
+                markup.add(InlineKeyboardButton("Отмена", callback_data="photo;cancel"),
+                           InlineKeyboardButton("Опубликовать", callback_data="photo;post"))
+                new_msg = self.bot.send_photo(msg.chat.id, photo=photo.file_id, caption="Опубликовать изображение?",
                                               reply_markup=markup)
                 self.bot.delete_message(msg.chat.id, msg.id)
-                self.set_session(str(cid), photo=photo, dialog=new_msg.id)
+                self.set_session(str(cid), photo=photo.file_id)
 
         @self.bot.message_handler(commands=["start"])
         def dm_start(msg):
             cid = msg.from_user.id
             users = self.get_users()
+            self.set_session(cid, expect=None)
 
-            if cid not in users:
+            if str(cid) not in users:
                 markup = ReplyKeyboardMarkup(resize_keyboard=True)
                 buttons = []
                 if msg.from_user.username:
-                    buttons.append(msg.from_user.username)
+                    buttons.append(KeyboardButton(msg.from_user.username))
                 if msg.from_user.first_name:
-                    buttons.append(msg.from_user.first_name)
+                    buttons.append(KeyboardButton(msg.from_user.first_name))
                 markup.add(*buttons)
 
                 self.bot.send_message(msg.chat.id, self.start_message, parse_mode="html")
@@ -144,7 +166,8 @@ class Bot:
                 self.set_session(cid, expect="nickname")
 
             else:
-                pass
+                self.bot.send_message(msg.chat.id, self.menu_message.format(users[str(cid)]['nickname']),
+                                      parse_mode="html")
 
         @self.bot.message_handler(commands=["help"])
         def dm_help(msg):
@@ -163,7 +186,7 @@ class Bot:
                     if not (msg.text.isalnum() and 3 < len(msg.text) < 33):
                         self.bot.send_message(msg.chat.id, self.nick_syntax_warning , parse_mode="html")
                         return
-                    if msg.text in [user['nickname'] for user in users]:
+                    if msg.text.lower() in [user['nickname'].lower() for user in users]:
                         self.bot.send_message(msg.chat.id, self.nick_exists_warning, parse_mode="html")
                         return
                     if cid not in users:
@@ -173,8 +196,10 @@ class Bot:
                         }
                         self.set_session(cid, expect=None)
                         self.set_users(users)
-                        self.bot.send_message(msg.chat.id, "ГОЙДА",
-                                              reply_markup=telebot.types.ReplyKeyboardRemove())
+                        self.bot.send_message(msg.chat.id, """<b>Добро пожаловать на Plumbum!</b>
+Ваш никнейм: {}""".format(msg.text),
+                                              reply_markup=telebot.types.ReplyKeyboardRemove(), parse_mode='html')
+                        dm_start(msg)
                     else:
                         users[cid]["nickname"] = msg.text
                         self.set_session(cid, expect=None)
