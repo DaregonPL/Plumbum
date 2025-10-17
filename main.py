@@ -140,10 +140,10 @@ class Bot:
                 markup = InlineKeyboardMarkup()
                 markup.add(InlineKeyboardButton("Отмена", callback_data="photo;cancel"),
                            InlineKeyboardButton("Опубликовать", callback_data="photo;post"))
-                new_msg = self.bot.send_photo(msg.chat.id, photo=photo.file_id, caption="Опубликовать изображение?",
-                                              reply_markup=markup)
+                self.bot.send_photo(msg.chat.id, photo=photo.file_id, caption="Опубликовать изображение?",
+                                    reply_markup=markup)
                 self.bot.delete_message(msg.chat.id, msg.id)
-                self.set_session(str(cid), photo=photo.file_id)
+                self.set_session(str(cid), photo=photo.file_id, expect="caption")
 
         @self.bot.message_handler(commands=["start"])
         def dm_start(msg):
