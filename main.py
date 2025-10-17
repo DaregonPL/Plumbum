@@ -42,6 +42,7 @@ class Bot:
     def __init__(self, api_token):
         self.bot = telebot.TeleBot(api_token)
         self.udb_path = "users_data.json"
+        self.cdb_path = "content.json"
         self.commands_functions = {
             "help": {
                 "get-text": lambda usr: self.help_message
@@ -53,6 +54,9 @@ class Bot:
             with open(self.udb_path, 'w') as udf:
                 json.dump({"auth": [],
                            "users": {}, "sessions": {}}, udf, indent=2)
+        if not exists(self.cdb_path):
+            with open(self.cdb_path, 'w') as cdf:
+                json.dump({}, cdf, indent=2)
         print()
 
     def get_session(self, user):
@@ -85,6 +89,18 @@ class Bot:
         with open(self.udb_path, 'w') as udb:
             json.dump(udb_data, udb, indent=2)
 
+    def get_content(self):
+        with open(self.cdb_path) as cdb:
+            cdb_data = json.load(cdb)
+        return cdb_data
+
+    def set_content(self, content: dict):
+        with open(self.cdb_path, 'w') as cdb:
+            json.dump(content, cdb, indent=2)
+
+    def main_window(self, cid):
+        session = self.get_session(cid)
+
     def boot(self):
         print("[STATUS] Pending")
         self.bot.infinity_polling()
@@ -94,8 +110,19 @@ class Bot:
 
         @self.bot.message_handler(content_types=["photo"])
         def dm_photo(msg):
-            photo = max(msg.photo, key=lambda x: x.height)
-            self.bot.send_photo(msg.chat.id, photo.file_id)
+            cid = msg.from_user.id
+            users = self.get_users()
+            if cid not in users:
+                dm_start(msg)
+            else:
+                photo = max(msg.photo, key=lambda x: x.height)
+                markup = InlineKeyboardMarkup()
+                markup.add(InlineKeyboardButton("Отмена", "photo;cancel"),
+                           InlineKeyboardButton("Опубликовать", "photo;post"))
+                new_msg = self.bot.send_photo(msg.chat.id, photo=photo, caption="Опубликовать изображение?",
+                                              reply_markup=markup)
+                self.bot.delete_message(msg.chat.id, msg.id)
+                self.set_session(str(cid), photo=photo, dialog=new_msg.id)
 
         @self.bot.message_handler(commands=["start"])
         def dm_start(msg):
