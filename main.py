@@ -4,7 +4,7 @@ from os.path import exists
 from os import kill, getpid
 
 import telebot
-from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 
@@ -30,7 +30,6 @@ class Bot:
 /help - Отобразить список команд (этот)
 
 /menu - Открыть обменник
-/profile - Посмотреть свой профиль
 /nickname - Обновить никнейм"""
     nick_syntax_warning = """\
 <b>Неверный формат никнейма</b>
@@ -74,11 +73,11 @@ class Bot:
     def set_session(self, user, **values):
         with open(self.udb_path) as udb:
             udb_data = json.load(udb)
-        if str(user) not in udb_data:
+        if str(user) not in udb_data['sessions']:
             udb_data['sessions'][str(user)] = {**values}
         else:
-            for name, value in values.keys():
-                udb_data[str(user)][name] = value
+            for name, value in values.items():
+                udb_data['sessions'][str(user)][name] = value
         with open(self.udb_path, 'w') as udb:
             json.dump(udb_data, udb, indent=2)
 
@@ -105,6 +104,53 @@ class Bot:
 
     def main_window(self, cid):
         session = self.get_session(cid)
+        content = self.get_content()
+        users = self.get_users()
+
+        if not content:
+            self.bot.send_message(cid, "Здесь пока ничего нет. Начните выкладывать!")
+            self.bot.delete_message(cid, session['inline'])
+            return
+        elif "select" not in session:
+            select = min([int(x) for x in content])
+            self.set_session(cid, select=select)
+        else:
+            if not session['select'] or session['select'] not in content:
+                select = min([int(x) for x in content])
+                self.set_session(cid, select=select)
+            else:
+                select = session['select']
+        photo = content[str(select)]
+        liked = cid in photo['likes']
+        text = f"""<b>{list(content.keys()).index(str(select)) + 1}/{len(content)}
+Автор:</b> {users[str(photo['author'])]['nickname']}
+<b>Опубликовано:</b> {photo['published']} (ID:{select})"""
+        prev_av = min([int(x) for x in content]) < select
+        next_av = max([int(x) for x in content]) > select
+
+        markup = InlineKeyboardMarkup()
+        buttons = []
+        if prev_av:
+            buttons.extend([
+                InlineKeyboardButton("⏮️", callback_data="menu;oldest"),
+                InlineKeyboardButton("◀️", callback_data="menu;prev")
+            ])
+        buttons.append(InlineKeyboardButton("❤️" if liked else "🩶", callback_data="menu;like"))
+        if next_av:
+            buttons.extend([
+                InlineKeyboardButton("▶️", callback_data="menu;next" if next_av else None),
+                InlineKeyboardButton("⏭️", callback_data="menu;newest" if next_av else None)
+            ])
+        markup.row(*buttons)
+        if photo['author'] == cid:
+            markup.row(InlineKeyboardButton('Удалить', callback_data="menu;del"))
+
+        media = InputMediaPhoto(
+            media=photo['photo'],
+            caption=text,
+            parse_mode='html'
+        )
+        self.bot.edit_message_media(media, cid, session['inline'], reply_markup=markup)
 
     def boot(self):
         print("[STATUS] Pending")
@@ -115,7 +161,7 @@ class Bot:
 
         @self.bot.callback_query_handler()
         def dm_call(call):
-            cid = call.message.from_user.id
+            cid = call.message.chat.id
             msg = call.message
             command, *data = call.data.split(';')
             session = self.get_session(str(cid))
@@ -127,6 +173,42 @@ class Bot:
                     self.set_session(str(cid), photo=None)
                 elif action == 'post':
                     content = self.get_content()
+                    ind = 0
+                    if content:
+                        ind = max([int(x) for x in content]) + 1
+                    content[str(ind)] = {
+                        'photo': session['photo'],
+                        'author': cid,
+                        'likes': [],
+                        'published': timeformat()
+                    }
+                    self.set_content(content)
+                    self.bot.delete_message(cid, session['inline'])
+                    self.bot.send_message(cid, "Изображение опубликовано. ID: {}".format(ind))
+                    self.set_session(str(cid), photo=None, inline=None)
+
+            elif command == 'menu':
+                action = data[0]
+                content = self.get_content()
+                keys = [int(x) for x in content]
+                if action == 'oldest':
+                    self.set_session(cid, select=min(keys))
+                elif action == 'prev':
+                    self.set_session(cid, select=keys[keys.index(session['select']) - 1])
+                elif action == 'next':
+                    self.set_session(cid, select=keys[keys.index(session['select']) + 1])
+                elif action == 'newest':
+                    self.set_session(cid, select=max(keys))
+                elif action == 'like':
+                    if cid not in content[str(session['select'])]['likes']:
+                        content[str(session['select'])]['likes'].append(cid)
+                    else:
+                        content[str(session['select'])]['likes'].remove(cid)
+                    self.set_content(content)
+                elif action == 'del':
+                    content.pop(str(session['select']))
+                    self.set_content(content)
+                self.main_window(cid)
 
 
         @self.bot.message_handler(content_types=["photo"])
@@ -140,16 +222,25 @@ class Bot:
                 markup = InlineKeyboardMarkup()
                 markup.add(InlineKeyboardButton("Отмена", callback_data="photo;cancel"),
                            InlineKeyboardButton("Опубликовать", callback_data="photo;post"))
-                self.bot.send_photo(msg.chat.id, photo=photo.file_id, caption="Опубликовать изображение?",
-                                    reply_markup=markup)
-                self.bot.delete_message(msg.chat.id, msg.id)
-                self.set_session(str(cid), photo=photo.file_id, expect="caption")
+                new = self.bot.send_photo(msg.chat.id, photo=photo.file_id, caption="Опубликовать изображение?",
+                                          reply_markup=markup)
+                self.set_session(str(cid), photo=photo.file_id, inline=new.id)
+                try:
+                    self.bot.delete_message(msg.chat.id, msg.id)
+                except:
+                    pass
 
         @self.bot.message_handler(commands=["start"])
         def dm_start(msg):
             cid = msg.from_user.id
             users = self.get_users()
             self.set_session(cid, expect=None)
+            session = self.get_session(cid)
+            try:
+                if "inline" in session:
+                    self.bot.delete_message(cid, session["inline"])
+            except:
+                pass
 
             if str(cid) not in users:
                 markup = ReplyKeyboardMarkup(resize_keyboard=True)
@@ -174,6 +265,23 @@ class Bot:
             self.bot.send_message(msg.chat.id, self.commands_functions["help"]["get-text"](msg.chat.id),
                                   parse_mode="html")
 
+        @self.bot.message_handler(commands=["menu"])
+        def dm_menu(msg):
+            cid = msg.from_user.id
+            users = self.get_users()
+            if str(cid) not in users:
+                dm_start(msg)
+            else:
+                session = self.get_session(cid)
+                try:
+                    if "inline" in session:
+                        self.bot.delete_message(cid, session["inline"])
+                except:
+                    pass
+                new = self.bot.send_message(cid, 'Секунду...')
+                self.set_session(cid, inline=new.id)
+                self.main_window(cid)
+
         @self.bot.message_handler(content_types=["text"])
         def dm_text(msg):
             cid = str(msg.from_user.id)
@@ -186,7 +294,7 @@ class Bot:
                     if not (msg.text.isalnum() and 3 < len(msg.text) < 33):
                         self.bot.send_message(msg.chat.id, self.nick_syntax_warning , parse_mode="html")
                         return
-                    if msg.text.lower() in [user['nickname'].lower() for user in users]:
+                    if msg.text.lower() in [user['nickname'].lower() for user in users.values()]:
                         self.bot.send_message(msg.chat.id, self.nick_exists_warning, parse_mode="html")
                         return
                     if cid not in users:
