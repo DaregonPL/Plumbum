@@ -113,7 +113,7 @@ class Bot:
         users = self.get_users()
         requests_moderator = self.commands_functions['menu']['allow_accepting_requests'](cid)
 
-        if not content:
+        if not [int(x) for x in content if content[x]['allowed'] or requests_moderator]:
             self.bot.send_message(cid, "Здесь пока ничего нет. Начните выкладывать!")
             self.bot.delete_message(cid, session['inline'])
             return
