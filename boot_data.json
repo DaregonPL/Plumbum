@@ -1,8 +1,8 @@
 {
-  "api_token":"7020472604:AAGRejkGpJECTne9Q1HdyD5qbOM8NCfIDSI",
+  "api_token":"{api_token}",
   "admin_tools": {
-    "accessible": true,
-    "password": "zov",
-    "post_requests": true
+    "accessible": true,  // 'false' will block AdminTools from loading its handlers
+    "password": "zov",  // "/auth {password}" to authorize as admin. Type "/help" to see other commands
+    "post_requests": true  // makes it nessesarry to confirm post by mod-r
   }
 }
