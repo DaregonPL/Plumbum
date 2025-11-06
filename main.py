@@ -30,7 +30,7 @@ class Bot:
 /help - Отобразить список команд (этот)
 
 /menu - Открыть обменник
-/nickname - Обновить никнейм"""
+Отправьте сюда изображение чтобы опубликовать его"""
     nick_syntax_warning = """\
 <b>Неверный формат никнейма</b>
 Никнейм должен:
@@ -50,6 +50,11 @@ class Bot:
         self.commands_functions = {
             "help": {
                 "get-text": lambda usr: self.help_message
+            },
+            "menu": {
+                "allow_delete_post": lambda photo_author, usr: photo_author == usr,
+                "allow_accepting_requests": lambda usr: False,
+                "default_status": True
             }
         }
         self.application_data = {
@@ -106,27 +111,29 @@ class Bot:
         session = self.get_session(cid)
         content = self.get_content()
         users = self.get_users()
+        requests_moderator = self.commands_functions['menu']['allow_accepting_requests'](cid)
 
         if not content:
             self.bot.send_message(cid, "Здесь пока ничего нет. Начните выкладывать!")
             self.bot.delete_message(cid, session['inline'])
             return
         elif "select" not in session:
-            select = min([int(x) for x in content])
+            select = max([int(x) for x in content if content[x]['allowed'] or requests_moderator])
             self.set_session(cid, select=select)
         else:
-            if not session['select'] or session['select'] not in content:
-                select = min([int(x) for x in content])
+            if not session['select'] or str(session['select']) not in content:
+                select = max([int(x) for x in content if content[x]['allowed'] or requests_moderator])
                 self.set_session(cid, select=select)
             else:
                 select = session['select']
         photo = content[str(select)]
         liked = cid in photo['likes']
         text = f"""<b>{list(content.keys()).index(str(select)) + 1}/{len(content)}
+{len(photo['likes'])} Likes
 Автор:</b> {users[str(photo['author'])]['nickname']}
 <b>Опубликовано:</b> {photo['published']} (ID:{select})"""
-        prev_av = min([int(x) for x in content]) < select
-        next_av = max([int(x) for x in content]) > select
+        prev_av = min([int(x) for x in content if content[x]['allowed'] or requests_moderator]) < select
+        next_av = max([int(x) for x in content if content[x]['allowed'] or requests_moderator]) > select
 
         markup = InlineKeyboardMarkup()
         buttons = []
@@ -142,8 +149,12 @@ class Bot:
                 InlineKeyboardButton("⏭️", callback_data="menu;newest" if next_av else None)
             ])
         markup.row(*buttons)
-        if photo['author'] == cid:
-            markup.row(InlineKeyboardButton('Удалить', callback_data="menu;del"))
+        lower_row = []
+        if self.commands_functions['menu']['allow_delete_post'](photo['author'], cid):
+            lower_row.append(InlineKeyboardButton('Удалить', callback_data="menu;del"))
+        if requests_moderator:
+            lower_row.append(InlineKeyboardButton('❌' if not photo['allowed'] else '✅', callback_data="menu;toggle"))
+        markup.row(*lower_row)
 
         media = InputMediaPhoto(
             media=photo['photo'],
@@ -163,6 +174,7 @@ class Bot:
         def dm_call(call):
             cid = call.message.chat.id
             msg = call.message
+            print(f'CALL: {call.data}')
             command, *data = call.data.split(';')
             session = self.get_session(str(cid))
 
@@ -180,17 +192,23 @@ class Bot:
                         'photo': session['photo'],
                         'author': cid,
                         'likes': [],
-                        'published': timeformat()
+                        'published': timeformat(),
+                        'allowed': self.commands_functions['menu']['default_status']
                     }
                     self.set_content(content)
                     self.bot.delete_message(cid, session['inline'])
                     self.bot.send_message(cid, "Изображение опубликовано. ID: {}".format(ind))
                     self.set_session(str(cid), photo=None, inline=None)
+                    if not self.commands_functions['menu']['default_status']:
+                        self.bot.send_message(cid,
+                                              "Включен безопасный режим. Это значит, что изображение станет " +
+                                              "видимым для других пользователей только после одобрения его модератором.")
 
             elif command == 'menu':
                 action = data[0]
+                requests_moderator = self.commands_functions['menu']['allow_accepting_requests'](cid)
                 content = self.get_content()
-                keys = [int(x) for x in content]
+                keys = [int(x) for x in content if content[x]['allowed'] or requests_moderator]
                 if action == 'oldest':
                     self.set_session(cid, select=min(keys))
                 elif action == 'prev':
@@ -207,6 +225,9 @@ class Bot:
                     self.set_content(content)
                 elif action == 'del':
                     content.pop(str(session['select']))
+                    self.set_content(content)
+                elif action == 'toggle':
+                    content[str(session['select'])]['allowed'] = not content[str(session['select'])]['allowed']
                     self.set_content(content)
                 self.main_window(cid)
 
@@ -315,11 +336,18 @@ class Bot:
                                               reply_markup=telebot.types.ReplyKeyboardRemove())
 
 
-    def enable_admin_tools(self, master_password):
+    def enable_admin_tools(self, master_password, post_requests=False):
         print("[STATUS] Enabling ADMINTOOLS")
         self.application_data["AdminTools"] = {}
         self.application_data["AdminTools"]["password"] = master_password
         self.application_data["AdminTools"]["help"] = """
+<b> ## Команды ## </b>
+/start - Перезапустить бота
+/help - Отобразить список команд (этот)
+
+/menu - Открыть обменник
+Отправьте сюда изображение чтобы опубликовать его
+
 <i>## Admin Tools ##</i>
 /auth {password} - get access to Admin Tools
 /post {text} - send every user of this bot a message
@@ -328,6 +356,10 @@ class Bot:
 """
         self.commands_functions["help"]["get-text"] = lambda usr: self.application_data["AdminTools"]["help"] \
             if check_auth(self, usr) else self.help_message
+        self.commands_functions["menu"]["allow_delete_post"] = lambda photo_author, usr: photo_author == usr or \
+            check_auth(self, usr)
+        self.commands_functions["menu"]["allow_accepting_requests"] = lambda usr: check_auth(self, usr)
+        self.commands_functions["menu"]["default_status"] = not post_requests
 
         def check_auth(self, usr):
             with open(self.udb_path) as udb:
@@ -344,6 +376,7 @@ class Bot:
 
         @self.bot.message_handler(commands=["auth"])
         def dm_at_auth(msg):
+            print("auth running")
             if msg.text[6:] == self.application_data["AdminTools"]["password"]:
                 new_auth(self, msg.from_user.id)
                 self.bot.send_message(msg.chat.id, "You can use Admin Tools now")
@@ -377,12 +410,12 @@ class Bot:
             self.bot.send_message(msg.from_user.id, "AT Session closed")
 
 
-#-- JSON-BASED LOADER --#
+# -- JSON-BASED LOADER -- #
 if __name__ == "__main__":
     with open("boot_data.json") as bd:
         boot_data = json.load(bd)
     bot = Bot(boot_data["api_token"])
-    bot.load_handlers()
     if "admin_tools" in boot_data and boot_data["admin_tools"]["accessible"]:
-        bot.enable_admin_tools(boot_data["admin_tools"]["password"])
+        bot.enable_admin_tools(boot_data["admin_tools"]["password"], post_requests=boot_data["admin_tools"]["post_requests"])
+    bot.load_handlers()
     bot.boot()
