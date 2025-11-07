@@ -112,28 +112,31 @@ class Bot:
         content = self.get_content()
         users = self.get_users()
         requests_moderator = self.commands_functions['menu']['allow_accepting_requests'](cid)
+        to_show = [x for x in content if content[x]['allowed'] or requests_moderator]
 
         if not [int(x) for x in content if content[x]['allowed'] or requests_moderator]:
             self.bot.send_message(cid, "Здесь пока ничего нет. Начните выкладывать!")
             self.bot.delete_message(cid, session['inline'])
             return
         elif "select" not in session:
-            select = max([int(x) for x in content if content[x]['allowed'] or requests_moderator])
+            self.bot.send_message(cid, "Select reset due to lack of session")
+            select = max([int(x) for x in to_show])
             self.set_session(cid, select=select)
         else:
-            if not session['select'] or str(session['select']) not in content:
-                select = max([int(x) for x in content if content[x]['allowed'] or requests_moderator])
+            if str(session['select']) not in to_show:
+                self.bot.send_message(cid, "Select reset due to bad select: {}".format(session['select']))
+                select = max([int(x) for x in to_show])
                 self.set_session(cid, select=select)
             else:
                 select = session['select']
         photo = content[str(select)]
         liked = cid in photo['likes']
-        text = f"""<b>{list(content.keys()).index(str(select)) + 1}/{len(content)}
+        text = f"""<b>{list(content.keys()).index(str(select)) + 1}/{len(to_show)}
 {len(photo['likes'])} Likes
 Автор:</b> {users[str(photo['author'])]['nickname']}
 <b>Опубликовано:</b> {photo['published']} (ID:{select})"""
-        prev_av = min([int(x) for x in content if content[x]['allowed'] or requests_moderator]) < select
-        next_av = max([int(x) for x in content if content[x]['allowed'] or requests_moderator]) > select
+        prev_av = min([int(x) for x in to_show]) < select
+        next_av = max([int(x) for x in to_show]) > select
 
         markup = InlineKeyboardMarkup()
         buttons = []
@@ -213,6 +216,7 @@ class Bot:
                     self.set_session(cid, select=min(keys))
                 elif action == 'prev':
                     self.set_session(cid, select=keys[keys.index(session['select']) - 1])
+                    print(keys, session['select'])
                 elif action == 'next':
                     self.set_session(cid, select=keys[keys.index(session['select']) + 1])
                 elif action == 'newest':
